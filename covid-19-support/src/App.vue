@@ -40,10 +40,14 @@
           :location="locationData"
           :attribution="attribution"
           @location-selected="passLocation"
-          @bounds="boundsUpdated"
           @center="centerUpdated"
           :mapUrl="mapUrl"
           :centroid="centroid"
+          @markersInView="
+            (m) => {
+              this.markersInView = m
+            }
+          "
         />
       </div>
     </div>
@@ -58,7 +62,6 @@ import ResourceMap from './components/ResourceMap.vue'
 import AboutUsModal from './components/AboutUs.vue'
 import MobileSearchFilters from './components/MobileSearchFilters'
 import MobileMapListToggle from './components/MobileMapListToggle'
-import { latLng } from 'leaflet'
 import { haversineDistance, sortByDistance } from './utilities'
 
 import { dayFilters, booleanFilters, dayAny } from './constants'
@@ -120,7 +123,6 @@ export default {
       locationData: { locValue: null, locId: null, currentBusiness: null, isSetByMap: false },
       showList: false,
       highlightFilters: [],
-      bounds: null,
       centroid: {
         lat: theme.settings.initialMapCenter.lat,
         lng: theme.settings.initialMapCenter.lng,
@@ -131,7 +133,8 @@ export default {
       darkMode: darkModeMediaQuery.matches,
       mapUrl: '',
       attribution: null,
-      socialMediaico: theme.socialMedia
+      socialMediaico: theme.socialMedia,
+      markersInView: []
     }
   },
   mounted() {
@@ -166,9 +169,6 @@ export default {
     },
     centerUpdated(center) {
       this.centroid = { lat: center.lat, lng: center.lng }
-    },
-    boundsUpdated(bounds) {
-      this.bounds = bounds
     },
     getDay(day) {
       if (day == 0) {
@@ -266,16 +266,11 @@ export default {
       return retList
     },
     highlightFilteredMarkers() {
-      var contained = [] //makers in map boundingbox
-      this.filteredMarkers.forEach((m) => {
-        if (this.bounds.contains(latLng(m.marker.gsx$lat.$t, m.marker.gsx$lon.$t))) contained.push(m)
-      })
-
       if (!this.isAnyDaySelected(this.day)) {
-        return contained
+        return this.markersInView
       }
 
-      return contained.map((m) => {
+      return this.markersInView.map((m) => {
         let obj = Object.assign({}, m)
         obj.oc = true
         return obj

@@ -127,13 +127,14 @@ export default {
         fill: '#f00'
       },
       clusterOptions: { spiderfyOnMaxZoom: true, maxClusterRadius: 40, disableClusteringAtZoom: 16 },
-      showKey: false
+      showKey: false,
+      bounds: null
     }
   },
   mounted() {
     this.editZoomControl()
     this.$nextTick(() => {
-      this.$emit('bounds', this.$refs.covidMap.mapObject.getBounds())
+      this.bounds = this.$refs.covidMap.mapObject.getBounds()
     })
   },
   computed: {
@@ -175,6 +176,7 @@ export default {
       this.$emit('center', center)
     },
     boundsUpdated(bounds) {
+      this.bounds = bounds
       this.$emit('bounds', bounds)
     },
     resetError() {
@@ -247,6 +249,13 @@ export default {
     },
     zoomUpdated(val) {
       this.zoom = val
+
+      this.$emit('markersInView', this.markersInView())
+    },
+    markersInView() {
+      return this.filteredMarkers.filter((m) => {
+        return this.bounds.contains(latLng(m.marker.gsx$lat.$t, m.marker.gsx$lon.$t))
+      })
     }
     // eslint-disable-next-line no-console
     // click: (e) => console.log('clusterclick', e),
