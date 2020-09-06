@@ -9,7 +9,7 @@
         :options="mapOptions"
         style="height: 100%; width: 100%;"
         @update:center="centerUpdated"
-        @update:zoom="(val) => (zoom = val)"
+        @update:zoom="zoomUpdated"
         @update:bounds="boundsUpdated"
       >
         <l-control position="topright">
@@ -244,6 +244,9 @@ export default {
       })
 
       return markerIcon
+    },
+    zoomUpdated(val) {
+      this.zoom = val
     }
     // eslint-disable-next-line no-console
     // click: (e) => console.log('clusterclick', e),
