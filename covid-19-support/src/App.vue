@@ -202,7 +202,10 @@ export default {
       //   });
       // }
 
-      this.entries = entries.feed.entry
+      this.entries = entries.feed.entry?.map((e, i) => {
+        e.uuid = i
+        return e
+      })
     },
     updateShowList(val) {
       this.showList = val

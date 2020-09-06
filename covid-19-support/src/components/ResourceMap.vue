@@ -48,7 +48,9 @@
             v-for="(item, index) in filteredMarkers"
             v-bind:key="index"
             @click="$emit('location-selected', { locValue: index, locId: item.marker.id.$t, isSetByMap: true })"
-          ></l-marker>
+            :options="{ onScreen: true, marker: item }"
+          >
+          </l-marker>
         </v-marker-cluster>
         <l-control position="bottomright" class="user-location-button">
           <a
@@ -74,7 +76,7 @@
 <script>
 import { BAlert } from 'bootstrap-vue'
 import { LMap, LTileLayer, LMarker, LControl, LCircle, LCircleMarker } from 'vue2-leaflet'
-import { latLng, Icon, ExtraMarkers } from 'leaflet'
+import { latLng, Icon, ExtraMarkers, DomUtil } from 'leaflet'
 import Vue2LeafletMarkerCluster from 'vue2-leaflet-markercluster'
 import IconListItem from './IconListItem.vue'
 import { businessIcon } from '../utilities'
@@ -128,13 +130,37 @@ export default {
       },
       clusterOptions: { spiderfyOnMaxZoom: true, maxClusterRadius: 40, disableClusteringAtZoom: 16 },
       showKey: false,
-      bounds: null
+      bounds: null,
+      covidLabels: {}
     }
   },
   mounted() {
     this.editZoomControl()
     this.$nextTick(() => {
       this.bounds = this.$refs.covidMap.mapObject.getBounds()
+
+      this.$refs.covidMap.mapObject.on('load', () => {
+        this.cacheLabels()
+        this.drawLabels()
+      })
+
+      this.$refs.covidMap.mapObject.on('moveend', () => {
+        this.cacheLabels()
+        this.drawLabels()
+      })
+
+      this.$refs.covidMap.mapObject.on('zoomend', () => {
+        this.cacheLabels()
+        this.drawLabels()
+      })
+
+      this.$refs.covidMap.mapObject.on('zoom', () => {
+        this.drawLabels()
+      })
+
+      this.$refs.covidMap.mapObject.on('move', () => {
+        this.drawLabels()
+      })
     })
   },
   computed: {
@@ -248,14 +274,159 @@ export default {
       return markerIcon
     },
     zoomUpdated(val) {
+      const markers = this.markersInView()
       this.zoom = val
 
-      this.$emit('markersInView', this.markersInView())
+      this.$emit('markersInView', markers)
     },
     markersInView() {
       return this.filteredMarkers.filter((m) => {
         return this.bounds.contains(latLng(m.marker.gsx$lat.$t, m.marker.gsx$lon.$t))
       })
+    },
+    cacheLabels() {
+      const labelIdPrefix = 'covid-label'
+
+      // Remove class instead
+      var tooltips = document.getElementsByClassName('covid-marker-label')
+      for (let i = 0; i < tooltips.length; i++) {
+        tooltips[i].classList.remove('open')
+        tooltips[i].classList.remove('right')
+      }
+
+      for (const layer of Object.values(this.$refs.covidMap.mapObject._layers)) {
+        if (!layer?.options?.onScreen) {
+          continue
+        }
+
+        if (this.covidLabels[layer.options.marker.marker.uuid]) {
+          continue
+        }
+
+        var text = layer.options.marker.marker.gsx$providername.$t
+        var div = document.createElement('div')
+        var span = document.createElement('span')
+        span.innerText = text
+        div.id = `${labelIdPrefix}-${layer.options.marker.marker.uuid}`
+        div.classList.add('covid-marker-label')
+        div.append(span)
+        document.body.appendChild(div)
+
+        this.covidLabels[layer.options.marker.marker.uuid] = {
+          labelScale: {
+            width: div.offsetWidth,
+            height: div.offsetHeight
+          }
+        }
+      }
+    },
+    drawLabels() {
+      const labelIdPrefix = 'covid-label'
+      const drawDirection = {
+        NONE: 0,
+        READY: 1,
+        LEFT: 2,
+        RIGHT: 3
+      }
+      const markersOnScreen = []
+
+      //
+      for (const layer of Object.values(this.$refs.covidMap.mapObject._layers)) {
+        if (!layer?.options?.onScreen) {
+          continue
+        }
+
+        const markerScale = DomUtil.getScale(layer._icon).boundingClientRect
+        const label = this.covidLabels[layer.options.marker.marker.uuid]
+        if (!label) {
+          continue
+        }
+
+        markersOnScreen.push({
+          leftBox: {
+            x: markerScale.x,
+            y: markerScale.y,
+            width: label.labelScale.width,
+            height: label.labelScale.height
+          },
+          rightBox: {
+            x: markerScale.x,
+            y: markerScale.y,
+            width: label.labelScale.width,
+            height: label.labelScale.height
+          },
+          layer: layer,
+          marker: layer.options.marker,
+          drawDirection: drawDirection.READY
+        })
+      }
+
+      for (const markerA of markersOnScreen) {
+        let shouldShowLeft = true
+        let shouldShowRight = true
+
+        for (const markerB of markersOnScreen) {
+          if (markerA.marker.marker.uuid === markerB.marker.marker.uuid || markerB.drawDirection === drawDirection.NONE) {
+            continue
+          }
+
+          // check for left box collision
+          if (
+            ((markerB.drawDirection === drawDirection.READY || markerB.drawDirection === drawDirection.LEFT) &&
+              markerA.leftBox.x < markerB.leftBox.x + markerB.leftBox.width &&
+              markerA.leftBox.x + markerA.leftBox.width > markerB.leftBox.x &&
+              markerA.leftBox.y < markerB.leftBox.y + markerB.leftBox.height &&
+              markerA.leftBox.y + markerA.leftBox.height > markerB.leftBox.y) ||
+            (markerA.leftBox.x < markerB.rightBox.x + markerB.rightBox.width &&
+              markerA.leftBox.x + markerA.leftBox.width > markerB.rightBox.x &&
+              markerA.leftBox.y < markerB.rightBox.y + markerB.rightBox.height &&
+              markerA.leftBox.y + markerA.leftBox.height > markerB.rightBox.y)
+          ) {
+            shouldShowLeft = false
+          }
+
+          // Check for right box collision
+          if (
+            ((markerB.drawDirection === drawDirection.READY || markerB.drawDirection === drawDirection.RIGHT) &&
+              markerA.rightBox.x < markerB.rightBox.x + markerB.rightBox.width &&
+              markerA.rightBox.x + markerA.rightBox.width > markerB.rightBox.x &&
+              markerA.rightBox.y < markerB.rightBox.y + markerB.rightBox.height &&
+              markerA.rightBox.y + markerA.rightBox.height > markerB.rightBox.y) ||
+            (markerA.rightBox.x < markerB.leftBox.x + markerB.leftBox.width &&
+              markerA.rightBox.x + markerA.rightBox.width > markerB.leftBox.x &&
+              markerA.rightBox.y < markerB.leftBox.y + markerB.leftBox.height &&
+              markerA.rightBox.y + markerA.rightBox.height > markerB.leftBox.y)
+          ) {
+            shouldShowRight = false
+          }
+        }
+
+        const element = document.getElementById(`${labelIdPrefix}-${markerA.marker.marker.uuid}`)
+        element.classList.remove('right')
+
+        // Set marker to not have draw direction if it can't be drawn
+        if (!(shouldShowLeft || shouldShowRight)) {
+          markerA.drawDirection = drawDirection.NONE
+          continue
+        }
+
+        // Prefer showing left before right
+        if (shouldShowLeft && shouldShowRight) {
+          shouldShowLeft = true
+        }
+
+        if (shouldShowLeft) {
+          element.style.transform = `translate3d(${markerA.leftBox.x}px, ${markerA.leftBox.y}px, 0px)`
+          element.classList.add('open')
+          markerA.drawDirection = drawDirection.LEFT
+        }
+
+        if (shouldShowRight) {
+          element.style.transform = `translate3d(${markerA.rightBox.x}px, ${markerA.rightBox.y}px, 0px)`
+          element.classList.add('open', 'right')
+          markerA.drawDirection = drawDirection.RIGHT
+        }
+      }
     }
     // eslint-disable-next-line no-console
     // click: (e) => console.log('clusterclick', e),
@@ -282,6 +453,37 @@ export default {
 </script>
 
 <style lang="scss">
+.covid-marker-label {
+  border: 1px solid #ff0000;
+  max-width: 132px;
+  font-size: 12px;
+  text-shadow: 1px 1px 1px #000000;
+  color: #ffffff;
+  z-index: 999999;
+  visibility: hidden;
+  position: absolute;
+  text-align: right;
+  backface-visibility: hidden;
+  will-change: transform;
+  vertical-align: middle;
+  padding-right: 32px;
+  padding-left: 0px;
+  box-sizing: border-box;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+
+  &.right {
+    text-align: left;
+    padding-left: 32px;
+    padding-right: 0px;
+  }
+
+  &.open {
+    visibility: visible;
+  }
+}
+
 .map {
   width: auto;
   height: 100%;
@@ -289,6 +491,14 @@ export default {
   padding: 0;
   /* margin-left: 8px;
     margin-right: 8px; */
+}
+
+.leaflet-tooltip {
+  visibility: hidden;
+
+  &.open {
+    visibility: visible;
+  }
 }
 
 .locAccuracy {
