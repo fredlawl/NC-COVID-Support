@@ -81,6 +81,141 @@ import Vue2LeafletMarkerCluster from 'vue2-leaflet-markercluster'
 import IconListItem from './IconListItem.vue'
 import { businessIcon } from '../utilities'
 
+const covidLabels = {}
+
+const DIRECTION = {
+  NORTH: 0,
+  EAST: 1,
+  SOUTH: 2,
+  WEST: 3
+}
+
+const createMarker = (marker, icon) => {
+  const scale = DomUtil.getScale(icon).boundingClientRect
+  return {
+    ...marker,
+    icon: icon,
+    dimensions: {
+      x: scale.width,
+      y: scale.height
+    },
+    position: {
+      x: scale.x,
+      y: scale.y
+    }
+  }
+}
+
+const createMarkerLabel = (marker, direction) => {
+  if (covidLabels[marker.uuid]) {
+    // update this to get new marker positions
+    covidLabels[marker.uuid].marker = marker
+    return covidLabels[marker.uuid]
+  }
+
+  const text = marker.gsx$providername.$t
+  const div = document.createElement('div')
+  const span = document.createElement('span')
+  span.innerText = text
+  div.id = `covid-label-${marker.uuid}`
+  div.classList.add('covid-marker-label')
+  div.append(span)
+  document.body.appendChild(div)
+
+  const label = {
+    element: div,
+    marker: marker,
+    hidden: false,
+    direction: direction,
+    dimensions: {
+      x: div.offsetWidth,
+      y: div.offsetHeight
+    },
+    position() {
+      return {
+        x:
+          this.direction === DIRECTION.WEST
+            ? this.marker.position.x - this.dimensions.x
+            : this.marker.position.x + this.marker.dimensions.x,
+        y: this.marker.position.y
+      }
+    },
+    clone() {
+      return {
+        element: this.element,
+        marker: this.marker,
+        hidden: this.hidden,
+        direction: this.direction,
+        dimensions: this.dimensions,
+        position: this.position,
+        hide: this.hide,
+        show: this.show,
+        draw: this.draw
+      }
+    },
+    hide() {
+      this.hidden = true
+      this.element.classList.remove('open')
+    },
+    show() {
+      this.hidden = false
+      this.element.classList.add('open')
+    },
+    draw() {
+      if (this.hidden) {
+        this.element.classList.remove('open')
+        return
+      }
+
+      const pos = this.position()
+      this.element.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0px)`
+
+      if (this.direction === DIRECTION.EAST) {
+        this.element.style.textAlign = `left`
+      } else {
+        this.element.style.textAlign = `right`
+      }
+
+      this.element.classList.add('open')
+    }
+  }
+
+  covidLabels[marker.uuid] = label
+  return label
+}
+
+const createMarkerLabelHitbox = (markerLabel, direction) => {
+  const clone = markerLabel.clone()
+  clone.direction = direction
+
+  return {
+    position: {
+      x: clone.direction.x === DIRECTION.WEST && !clone.hidden ? clone.position().x : clone.marker.position.x,
+      y: clone.marker.position.y
+    },
+    dimensions: {
+      x: !clone.hidden ? clone.dimensions.x + clone.marker.dimensions.x : clone.marker.dimensions.x,
+      y: !clone.hidden ? clone.dimensions.y : clone.marker.dimensions.y
+    },
+    collidesWith(b) {
+      return (
+        this.position.x + this.dimensions.x > b.position.x &&
+        this.position.y + this.dimensions.y > b.position.y &&
+        this.position.x < b.position.x + b.dimensions.x &&
+        this.position.y < b.position.y + b.dimensions.y
+      )
+    },
+    equals(b) {
+      return (
+        this.position.x === b.position.x &&
+        this.position.y === b.position.y &&
+        this.dimensions.x === b.dimensions.x &&
+        this.dimensions.y === b.dimensions.y
+      )
+    }
+  }
+}
+
 delete Icon.Default.prototype._getIconUrl
 Icon.Default.mergeOptions({
   iconRetinaUrl: require('leaflet/dist/images/marker-icon-2x.png'),
@@ -139,18 +274,11 @@ export default {
     this.$nextTick(() => {
       this.bounds = this.$refs.covidMap.mapObject.getBounds()
 
-      this.$refs.covidMap.mapObject.on('load', () => {
-        this.cacheLabels()
+      this.$refs.covidMap.mapObject.on('movestart', () => {
         this.drawLabels()
       })
 
-      this.$refs.covidMap.mapObject.on('moveend', () => {
-        this.cacheLabels()
-        this.drawLabels()
-      })
-
-      this.$refs.covidMap.mapObject.on('zoomend', () => {
-        this.cacheLabels()
+      this.$refs.covidMap.mapObject.on('move', () => {
         this.drawLabels()
       })
 
@@ -158,7 +286,7 @@ export default {
         this.drawLabels()
       })
 
-      this.$refs.covidMap.mapObject.on('move', () => {
+      this.$refs.covidMap.mapObject.on('zoomend', () => {
         this.drawLabels()
       })
     })
@@ -284,148 +412,42 @@ export default {
         return this.bounds.contains(latLng(m.marker.gsx$lat.$t, m.marker.gsx$lon.$t))
       })
     },
-    cacheLabels() {
-      const labelIdPrefix = 'covid-label'
-
-      // Remove class instead
-      var tooltips = document.getElementsByClassName('covid-marker-label')
-      for (let i = 0; i < tooltips.length; i++) {
-        tooltips[i].classList.remove('open')
-        tooltips[i].classList.remove('right')
-      }
-
-      for (const layer of Object.values(this.$refs.covidMap.mapObject._layers)) {
-        if (!layer?.options?.onScreen) {
-          continue
-        }
-
-        if (this.covidLabels[layer.options.marker.marker.uuid]) {
-          continue
-        }
-
-        var text = layer.options.marker.marker.gsx$providername.$t
-        var div = document.createElement('div')
-        var span = document.createElement('span')
-        span.innerText = text
-        div.id = `${labelIdPrefix}-${layer.options.marker.marker.uuid}`
-        div.classList.add('covid-marker-label')
-        div.append(span)
-        document.body.appendChild(div)
-
-        this.covidLabels[layer.options.marker.marker.uuid] = {
-          labelScale: {
-            width: div.offsetWidth,
-            height: div.offsetHeight
-          }
-        }
-      }
-    },
     drawLabels() {
-      const labelIdPrefix = 'covid-label'
-      const drawDirection = {
-        NONE: 0,
-        READY: 1,
-        LEFT: 2,
-        RIGHT: 3
-      }
-      const markersOnScreen = []
-
-      //
+      const availableMarkerLabels = []
       for (const layer of Object.values(this.$refs.covidMap.mapObject._layers)) {
         if (!layer?.options?.onScreen) {
           continue
         }
 
-        const markerScale = DomUtil.getScale(layer._icon).boundingClientRect
-        const label = this.covidLabels[layer.options.marker.marker.uuid]
-        if (!label) {
-          continue
-        }
-
-        markersOnScreen.push({
-          leftBox: {
-            x: markerScale.x,
-            y: markerScale.y,
-            width: label.labelScale.width,
-            height: label.labelScale.height
-          },
-          rightBox: {
-            x: markerScale.x,
-            y: markerScale.y,
-            width: label.labelScale.width,
-            height: label.labelScale.height
-          },
-          layer: layer,
-          marker: layer.options.marker,
-          drawDirection: drawDirection.READY
-        })
+        const marker = createMarker(layer.options.marker.marker, layer._icon)
+        const label = createMarkerLabel(marker, DIRECTION.WEST)
+        label.hidden = false
+        availableMarkerLabels.push(label)
       }
 
-      for (const markerA of markersOnScreen) {
-        let shouldShowLeft = true
-        let shouldShowRight = true
+      for (const a of availableMarkerLabels) {
+        a.direction = DIRECTION.WEST
 
-        for (const markerB of markersOnScreen) {
-          if (markerA.marker.marker.uuid === markerB.marker.marker.uuid || markerB.drawDirection === drawDirection.NONE) {
+        for (const b of availableMarkerLabels) {
+          const aEast = createMarkerLabelHitbox(a, DIRECTION.EAST)
+          const bEast = createMarkerLabelHitbox(b, DIRECTION.EAST)
+          const aWest = createMarkerLabelHitbox(a, DIRECTION.WEST)
+          const bWest = createMarkerLabelHitbox(b, DIRECTION.WEST)
+
+          if (aWest.equals(bWest) || aEast.equals(bEast)) {
             continue
           }
 
-          // check for left box collision
-          if (
-            ((markerB.drawDirection === drawDirection.READY || markerB.drawDirection === drawDirection.LEFT) &&
-              markerA.leftBox.x < markerB.leftBox.x + markerB.leftBox.width &&
-              markerA.leftBox.x + markerA.leftBox.width > markerB.leftBox.x &&
-              markerA.leftBox.y < markerB.leftBox.y + markerB.leftBox.height &&
-              markerA.leftBox.y + markerA.leftBox.height > markerB.leftBox.y) ||
-            (markerA.leftBox.x < markerB.rightBox.x + markerB.rightBox.width &&
-              markerA.leftBox.x + markerA.leftBox.width > markerB.rightBox.x &&
-              markerA.leftBox.y < markerB.rightBox.y + markerB.rightBox.height &&
-              markerA.leftBox.y + markerA.leftBox.height > markerB.rightBox.y)
-          ) {
-            shouldShowLeft = false
+          if (aWest.collidesWith(bWest)) {
+            a.direction = DIRECTION.EAST
           }
 
-          // Check for right box collision
-          if (
-            ((markerB.drawDirection === drawDirection.READY || markerB.drawDirection === drawDirection.RIGHT) &&
-              markerA.rightBox.x < markerB.rightBox.x + markerB.rightBox.width &&
-              markerA.rightBox.x + markerA.rightBox.width > markerB.rightBox.x &&
-              markerA.rightBox.y < markerB.rightBox.y + markerB.rightBox.height &&
-              markerA.rightBox.y + markerA.rightBox.height > markerB.rightBox.y) ||
-            (markerA.rightBox.x < markerB.leftBox.x + markerB.leftBox.width &&
-              markerA.rightBox.x + markerA.rightBox.width > markerB.leftBox.x &&
-              markerA.rightBox.y < markerB.leftBox.y + markerB.leftBox.height &&
-              markerA.rightBox.y + markerA.rightBox.height > markerB.leftBox.y)
-          ) {
-            shouldShowRight = false
+          if (a.direction === DIRECTION.EAST && aEast.collidesWith(bEast)) {
+            a.hidden = true
           }
         }
 
-        const element = document.getElementById(`${labelIdPrefix}-${markerA.marker.marker.uuid}`)
-        element.classList.remove('right')
-
-        // Set marker to not have draw direction if it can't be drawn
-        if (!(shouldShowLeft || shouldShowRight)) {
-          markerA.drawDirection = drawDirection.NONE
-          continue
-        }
-
-        // Prefer showing left before right
-        if (shouldShowLeft && shouldShowRight) {
-          shouldShowLeft = true
-        }
-
-        if (shouldShowLeft) {
-          element.style.transform = `translate3d(${markerA.leftBox.x}px, ${markerA.leftBox.y}px, 0px)`
-          element.classList.add('open')
-          markerA.drawDirection = drawDirection.LEFT
-        }
-
-        if (shouldShowRight) {
-          element.style.transform = `translate3d(${markerA.rightBox.x}px, ${markerA.rightBox.y}px, 0px)`
-          element.classList.add('open', 'right')
-          markerA.drawDirection = drawDirection.RIGHT
-        }
+        a.draw()
       }
     }
     // eslint-disable-next-line no-console
@@ -462,22 +484,12 @@ export default {
   z-index: 999999;
   visibility: hidden;
   position: absolute;
-  text-align: right;
   backface-visibility: hidden;
   will-change: transform;
-  vertical-align: middle;
-  padding-right: 32px;
-  padding-left: 0px;
   box-sizing: border-box;
   min-height: 44px;
   display: flex;
   align-items: center;
-
-  &.right {
-    text-align: left;
-    padding-left: 32px;
-    padding-right: 0px;
-  }
 
   &.open {
     visibility: visible;
